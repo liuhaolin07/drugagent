@@ -102,7 +102,7 @@ async def main():
             await ev("(() => { document.getElementById('go').click(); return 'clicked'; })()")
 
             status = ""
-            for _ in range(150):  # ≤ 300s
+            for _ in range(250):  # ≤ 500s（LLM 免费档偶尔很慢，留足余量）
                 await asyncio.sleep(2)
                 status = await ev("document.getElementById('status')?.textContent || ''")
                 if status and any(k in status for k in ("完成", "出错", "连接中断")):
@@ -118,12 +118,15 @@ async def main():
                 "JSON.stringify({"
                 "status: document.getElementById('status')?.textContent,"
                 "marked_ok: typeof marked !== 'undefined',"
-                "pills: ['p-lit','p-mol','p-rep'].map(i => document.getElementById(i).textContent),"
+                "pills: ['p-lit','p-mol','p-opt','p-rep'].map(i => document.getElementById(i).textContent),"
                 "lit_len: document.getElementById('c-lit').innerHTML.length,"
                 "mol_len: document.getElementById('c-mol').innerHTML.length,"
+                "opt_len: document.getElementById('c-opt').innerHTML.length,"
                 "rep_len: document.getElementById('c-rep').innerHTML.length,"
                 "imgs: document.querySelectorAll('#mol-grid img').length,"
-                "imgs_ok: [...document.querySelectorAll('#mol-grid img')].filter(i => i.complete && i.naturalWidth > 0).length"
+                "imgs_ok: [...document.querySelectorAll('#mol-grid img')].filter(i => i.complete && i.naturalWidth > 0).length,"
+                "opt_imgs: document.querySelectorAll('#opt-grid img').length,"
+                "opt_imgs_ok: [...document.querySelectorAll('#opt-grid img')].filter(i => i.complete && i.naturalWidth > 0).length"
                 "})")
             print("⑤ DOM 诊断:", diag)
 

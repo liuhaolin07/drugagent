@@ -40,8 +40,8 @@ footer{color:var(--dim);font-size:12px;padding:0 32px 28px}
 </head>
 <body>
 <header>
-  <h1>🧬 DrugAgent <span class="v">v0.3</span></h1>
-  <p>多智能体药物发现助手 · 文献检索员 → 分子分析员 → 综合评审员</p>
+  <h1>🧬 DrugAgent <span class="v">v0.4</span></h1>
+  <p>多智能体药物发现助手 · 文献检索员 → 分子分析员 → 分子优化员 → 综合评审员</p>
 </header>
 <div class="controls">
   <input id="topic" value="EGFR 抑制剂" placeholder="输入靶点 / 主题，例如：EGFR 抑制剂">
@@ -51,7 +51,8 @@ footer{color:var(--dim);font-size:12px;padding:0 32px 28px}
 <main>
   <section class="card"><h2>① 文献检索员（本地知识库 + PubMed 在线检索）<i class="pill" id="p-lit">等待</i></h2><div class="content" id="c-lit"></div></section>
   <section class="card"><h2>② 分子分析员（PubChem + RDKit 性质计算）<i class="pill" id="p-mol">等待</i></h2><div class="content" id="c-mol"></div><div class="grid" id="mol-grid"></div></section>
-  <section class="card"><h2>③ 综合评审员（候选分子分析报告 + 参考文献）<i class="pill" id="p-rep">等待</i></h2><div class="content" id="c-rep"></div></section>
+  <section class="card"><h2>③ 分子优化员（规则式类似物生成 + 性质优化筛选）<i class="pill" id="p-opt">等待</i></h2><div class="content" id="c-opt"></div><div class="grid" id="opt-grid"></div></section>
+  <section class="card"><h2>④ 综合评审员（候选分子分析报告 + 参考文献）<i class="pill" id="p-rep">等待</i></h2><div class="content" id="c-rep"></div></section>
 </main>
 <footer>数据源：PubMed / PubChem / RDKit · 模型：GLM-4-Flash（免费档）+ DeepSeek 兜底 · 仅供学习研究演示</footer>
 <script>
@@ -59,12 +60,13 @@ const $ = id => document.getElementById(id);
 const esc = t => (t || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
 const render = t => (window.marked ? marked.parse(t || '') : '<pre>' + esc(t) + '</pre>');
 function setPill(id, cls, txt) { const p = $(id); p.className = 'pill ' + (cls || ''); p.textContent = txt; }
+const fmtD = v => (v > 0 ? '+' : '') + v;
 let timer = null, t0 = 0;
 $('go').onclick = () => {
   const topic = $('topic').value.trim() || 'EGFR 抑制剂';
   $('go').disabled = true;
-  ['lit','mol','rep'].forEach(k => { setPill('p-'+k,'','等待'); $('c-'+k).innerHTML = ''; });
-  $('mol-grid').innerHTML = '';
+  ['lit','mol','opt','rep'].forEach(k => { setPill('p-'+k,'','等待'); $('c-'+k).innerHTML = ''; });
+  $('mol-grid').innerHTML = ''; $('opt-grid').innerHTML = '';
   t0 = Date.now();
   timer = setInterval(() => { $('status').textContent = '分析中… ' + (Math.round((Date.now()-t0)/100)/10) + 's'; }, 200);
   setPill('p-lit', 'run', '进行中…');
@@ -73,14 +75,20 @@ $('go').onclick = () => {
     const d = JSON.parse(e.data);
     if (d.type === 'start') { window._cands = d.candidates || []; }
     else if (d.type === 'stage') {
-      const map = {literature:'lit', molecules:'mol', report:'rep'}[d.stage];
+      const map = {literature:'lit', molecules:'mol', optimization:'opt', report:'rep'}[d.stage];
       setPill('p-'+map, 'done', '完成');
       $('c-'+map).innerHTML = render(d.text) + (d.refs ? render(d.refs) : '');
       if (d.stage === 'literature') setPill('p-mol', 'run', '进行中…');
       if (d.stage === 'molecules') {
-        setPill('p-rep', 'run', '进行中…');
+        setPill('p-opt', 'run', '进行中…');
         $('mol-grid').innerHTML = (window._cands || []).map(n =>
           `<figure><img src="/api/molimg?name=${encodeURIComponent(n)}" alt="${n}"><figcaption>${n}</figcaption></figure>`).join('');
+      }
+      if (d.stage === 'optimization') {
+        setPill('p-rep', 'run', '进行中…');
+        $('opt-grid').innerHTML = (d.analogs || []).map(a =>
+          `<figure><img src="/api/molimg?smiles=${encodeURIComponent(a.smiles)}" alt="${a.id}">` +
+          `<figcaption>${a.id} · ${esc(a.label)}<br>QED ${a.qed}（Δ${fmtD(a.dqed)}）· 相似度 ${a.sim}</figcaption></figure>`).join('');
       }
     }
     else if (d.type === 'done') { clearInterval(timer); $('go').disabled = false; $('status').textContent = '完成 ✅ 用时 ' + d.elapsed + 's' + (d.report_path ? ' · 报告已存 ' + d.report_path : ''); ev.close(); }

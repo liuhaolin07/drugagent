@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""DrugAgent Web UI（v0.3）：FastAPI + SSE 实时进度 + RDKit 分子结构图。
+"""DrugAgent Web UI（v0.4）：FastAPI + SSE 实时进度 + RDKit 分子结构图。
 
 启动： python web.py     → http://127.0.0.1:8077
 """
@@ -8,6 +8,7 @@ import json
 import os
 import time
 from datetime import datetime
+from typing import Optional
 
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
@@ -21,7 +22,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE, "web")
 REPORTS_DIR = os.path.join(BASE, "reports")
 
-app = FastAPI(title="DrugAgent", version="0.3")
+app = FastAPI(title="DrugAgent", version="0.4")
 _mol_img_cache = {}
 
 
@@ -39,14 +40,22 @@ def marked_js():
 
 
 @app.get("/api/molimg")
-def molimg(name: str):
-    """按分子名返回二维结构图 PNG（PubChem 取 SMILES + RDKit 绘制，带缓存）。"""
-    key = name.strip().lower()
+def molimg(name: Optional[str] = None, smiles: Optional[str] = None):
+    """返回分子二维结构图 PNG：name → PubChem 取 SMILES；smiles → 直接绘制（带缓存）。"""
+    if smiles:
+        key = "smi:" + smiles
+    elif name:
+        key = "name:" + name.strip().lower()
+    else:
+        return Response(status_code=400, media_type="application/json",
+                        content=json.dumps({"error": "需要 name 或 smiles 参数"}).encode("utf-8"))
     if key in _mol_img_cache:
         return Response(_mol_img_cache[key], media_type="image/png")
     try:
-        smi = smiles_from_pubchem(name)
+        smi = smiles if smiles else smiles_from_pubchem(name)
         m = Chem.MolFromSmiles(smi)
+        if m is None:
+            raise ValueError("SMILES 解析失败")
         img = Draw.MolToImage(m, size=(260, 200))
         buf = io.BytesIO()
         img.save(buf, format="PNG")
@@ -79,6 +88,10 @@ def run(topic: str = Query(default="EGFR 抑制剂")):
                 if kind in ("literature", "molecules"):
                     yield _sse({"type": "stage", "stage": kind, "status": "done",
                                 "text": payload.get("text", "")})
+                elif kind == "optimization":
+                    yield _sse({"type": "stage", "stage": kind, "status": "done",
+                                "text": payload.get("text", "") + "\n\n" + payload.get("table_md", ""),
+                                "analogs": payload.get("analogs", [])})
                 elif kind == "report":
                     yield _sse({"type": "stage", "stage": "report", "status": "done",
                                 "text": payload.get("text", ""),
@@ -90,6 +103,9 @@ def run(topic: str = Query(default="EGFR 抑制剂")):
                 f.write(f"# 候选分子分析报告（{topic}）\n\n")
                 f.write("## 文献要点\n\n" + collected.get("literature", {}).get("text", "") + "\n\n")
                 f.write("## 分子分析\n\n" + collected.get("molecules", {}).get("text", "") + "\n\n")
+                f.write("## 分子生成与优化\n\n"
+                        + collected.get("optimization", {}).get("text", "") + "\n\n"
+                        + collected.get("optimization", {}).get("table_md", "") + "\n\n")
                 f.write("## 综合报告\n\n" + collected.get("report", {}).get("text", "") + "\n\n"
                         + collected.get("report", {}).get("refs", "") + "\n")
             yield _sse({"type": "done", "elapsed": round(time.time() - t0, 1),
