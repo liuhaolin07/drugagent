@@ -170,19 +170,17 @@ class Team:
         lit["local"] = local
         return lit
 
-    def analyze(self, topic, candidates, on_stage=None):
-        """完整流程：文献 → 分子 → 评审。返回各阶段结果。"""
+    def analyze_iter(self, topic, candidates):
+        """生成器版完整流程：逐步产出 (stage, payload)。CLI 与 Web 共用。"""
         names = [c["name"] for c in candidates]
         lit = self._lit_stage(topic)
-        if on_stage:
-            on_stage("literature", lit)
+        yield "literature", lit
 
         mol = self.mol.run(
             "对候选分子名单做批量性质分析，并总结成 Markdown 表 + 初筛结论。",
             context=f"候选名单：{names}（直接一次性调用 analyze_molecules）",
         )
-        if on_stage:
-            on_stage("molecules", mol)
+        yield "molecules", mol
 
         raw_mol = None
         for entry in mol["tool_log"]:
@@ -195,8 +193,15 @@ class Team:
         task = ("输出《候选分子分析报告》。注意：性质表请原样嵌入下方《性质表》"
                 "（逐字复制、不得改动任何数值）：\n\n" + table)
         rep = self.synth.run(task, context=ctx)
-        if on_stage:
-            on_stage("report", rep)
-
         refs = _render_refs(lit.get("papers"), lit.get("local"))
-        return {"literature": lit, "molecules": mol, "report": rep, "refs": refs}
+        yield "report", {"text": rep["text"], "refs": refs}
+
+    def analyze(self, topic, candidates, on_stage=None):
+        """完整流程（非流式版）：收集 analyze_iter 的结果。"""
+        out = {}
+        for kind, payload in self.analyze_iter(topic, candidates):
+            out[kind] = payload
+            if on_stage:
+                on_stage(kind, payload)
+        return {"literature": out["literature"], "molecules": out["molecules"],
+                "report": out["report"], "refs": out["report"].get("refs", "")}

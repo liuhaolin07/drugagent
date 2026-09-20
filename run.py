@@ -25,7 +25,7 @@ def banner(text, style="cyan"):
 def main():
     topic = sys.argv[1] if len(sys.argv) > 1 else "EGFR 抑制剂"
     console.print(Panel.fit(
-        f"[bold]DrugAgent v0.2[/bold] · 多智能体药物发现助手\n"
+        f"[bold]DrugAgent v0.3[/bold] · 多智能体药物发现助手\n"
         f"主题：[yellow]{topic}[/yellow]\n"
         f"智能体：文献检索员 → 分子分析员 → 综合评审员",
         subtitle="数据源: PubMed / PubChem / RDKit / 本地知识库", border_style="blue"))

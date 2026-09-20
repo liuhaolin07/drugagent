@@ -4,3 +4,4 @@ requests
 rich
 fastapi
 uvicorn
+websockets  # check_webui.py（无头验证工具）依赖
