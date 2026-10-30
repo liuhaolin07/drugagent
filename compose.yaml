@@ -1,0 +1,22 @@
+services:
+  drugagent:
+    build: .
+    image: drugagent:local
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${DRUGAGENT_BIND_ADDRESS:-127.0.0.1}:${DRUGAGENT_PORT:-8077}:8077"
+    environment:
+      GLM_API_KEY: ${GLM_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DRUGAGENT_MODEL: ${DRUGAGENT_MODEL:-glm-4-flash}
+      DRUGAGENT_HOST: 0.0.0.0
+      DRUGAGENT_PORT: "8077"
+      DRUGAGENT_REPORTS_DIR: /app/storage/reports
+      DRUGAGENT_CACHE_DIR: /app/storage/cache
+    volumes:
+      - drugagent-storage:/app/storage
+    stop_grace_period: 30s
+
+volumes:
+  drugagent-storage:

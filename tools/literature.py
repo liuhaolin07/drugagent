@@ -7,16 +7,20 @@ import json
 import os
 import time
 import xml.etree.ElementTree as ET
+from threading import RLock
 
 import requests
 
 from tools.retriever import Retriever
+from tools.cache import save_json
+from config import settings
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 CORPUS_PATH = os.path.join(DATA_DIR, "corpus.json")
-PAPER_CACHE = os.path.join(DATA_DIR, "paper_cache.json")
+PAPER_CACHE = str(settings.cache_dir / "paper_cache.json")
 
 _R = None
+_CACHE_LOCK = RLock()
 
 
 def _load_json(path, default):
@@ -28,8 +32,7 @@ def _load_json(path, default):
 
 
 def _save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=1)
+    save_json(path, data)
 
 
 def _doc_from_corpus(d):
@@ -44,6 +47,11 @@ def _doc_from_paper(p):
 
 
 def _retriever():
+    with _CACHE_LOCK:
+        return _init_retriever()
+
+
+def _init_retriever():
     global _R
     if _R is None:
         _R = Retriever()
@@ -76,15 +84,15 @@ def search_pubmed(query, retmax=4):
                       timeout=40)
     r2.raise_for_status()
     papers = _parse_pubmed_xml(r2.content)
-    cache = _load_json(PAPER_CACHE, [])
-    have = {p["pmid"] for p in cache}
-    new = [p for p in papers if p["pmid"] not in have]
-    if new:
-        cache.extend(new)
-        _save_json(PAPER_CACHE, cache)
-        global _R
-        if _R is not None:
-            _R.add([_doc_from_paper(p) for p in new])
+    with _CACHE_LOCK:
+        cache = _load_json(PAPER_CACHE, [])
+        have = {p["pmid"] for p in cache}
+        new = [p for p in papers if p["pmid"] not in have]
+        if new:
+            cache.extend(new)
+            _save_json(PAPER_CACHE, cache)
+            if _R is not None:
+                _R.add([_doc_from_paper(p) for p in new])
     return {"results": [{"pmid": p["pmid"], "title": p["title"],
                          "journal": p.get("journal", ""), "year": p.get("year", ""),
                          "abstract": (p.get("abstract") or "")[:600]} for p in papers],

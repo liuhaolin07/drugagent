@@ -6,9 +6,12 @@ import json
 import math
 import os
 import re
+from threading import RLock
+from tools.cache import save_json
+from config import settings
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
-EMB_CACHE = os.path.join(DATA_DIR, "embed_cache.json")
+EMB_CACHE = str(settings.cache_dir / "embed_cache.json")
 
 
 def _tok(s):
@@ -28,14 +31,19 @@ def _cos(a, b):
 
 class Retriever:
     def __init__(self):
+        self._lock = RLock()
         self.docs = []
         try:
-            self._emb = json.load(open(EMB_CACHE, encoding="utf-8"))
+            with open(EMB_CACHE, encoding="utf-8") as source:
+                self._emb = json.load(source)
+            if not isinstance(self._emb, dict):
+                self._emb = {}
         except Exception:
             self._emb = {}
 
     def add(self, docs):
-        self.docs.extend(docs)
+        with self._lock:
+            self.docs.extend(docs)
 
     def _doc_text(self, d):
         return f"{d.get('title', '')}。{(d.get('text') or '')[:1200]}"
@@ -47,12 +55,12 @@ class Retriever:
         if miss:
             from llm import embed
             vecs = embed(miss)
-            if vecs is None:
+            if not vecs or len(vecs) != len(miss):
                 return None
             for t, v in zip(miss, vecs):
                 self._emb[_sha(t)] = v
             try:
-                json.dump(self._emb, open(EMB_CACHE, "w", encoding="utf-8"))
+                save_json(EMB_CACHE, self._emb)
             except Exception:
                 pass
         return [self._emb[k] for k in keys]
@@ -82,10 +90,14 @@ class Retriever:
             scores.append((s, i))
         return scores
 
-    def search(self, query, top=4):
+    def search(self, query, top=4, *, use_embeddings=True):
+        with self._lock:
+            return self._search(query, top, use_embeddings)
+
+    def _search(self, query, top, use_embeddings):
         if not self.docs:
             return []
-        qv = self._embed_texts([query])
+        qv = self._embed_texts([query]) if use_embeddings else None
         if qv is not None:
             dv = self._embed_texts([self._doc_text(d) for d in self.docs])
             if dv is not None:

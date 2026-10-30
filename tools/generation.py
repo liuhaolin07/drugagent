@@ -9,7 +9,7 @@
 性质均为 RDKit 计算值，未经实验 / 对接验证，仅供下一步评估参考。
 """
 from rdkit import Chem
-from rdkit.Chem import AllChem, DataStructs
+from rdkit.Chem import AllChem, DataStructs, rdFingerprintGenerator
 
 try:
     from tools.molecules import lipinski_pass, mol_props
@@ -44,11 +44,12 @@ TRANSFORMS = [
 MAX_ANALOGS = 200   # 单次枚举上限
 MIN_SIM = 0.4       # 与母体的最低相似度（Tanimoto）
 TOP_K = 6           # 输出 Top 数量
+_MORGAN = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
 
 
 def _fp(mol):
     """Morgan 指纹（用于相似度计算）。"""
-    return AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=2048)
+    return _MORGAN.GetFingerprint(mol)
 
 
 def generate_analogs(parent_smiles, max_analogs=MAX_ANALOGS):

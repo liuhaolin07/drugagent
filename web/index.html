@@ -1,101 +1,257 @@
 <!doctype html>
-<html lang="zh">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DrugAgent · 多智能体药物发现助手</title>
-<script src="/marked.min.js"></script>
-<style>
-:root{--bg:#0c1220;--card:#141d30;--line:#24324d;--txt:#e6edf7;--dim:#8fa3c0;--blue:#4c8dff;--green:#37d39b}
-*{box-sizing:border-box}
-body{margin:0;font-family:"Microsoft YaHei",system-ui,sans-serif;background:radial-gradient(1200px 600px at 20% -10%,#16233c 0%,var(--bg) 55%);color:var(--txt);min-height:100vh}
-header{padding:28px 32px 6px}
-header h1{margin:0;font-size:26px;letter-spacing:.5px}
-header h1 .v{font-size:12px;color:var(--blue);border:1px solid var(--blue);border-radius:20px;padding:2px 10px;vertical-align:middle;margin-left:8px}
-header p{color:var(--dim);margin:8px 0 0}
-.controls{display:flex;gap:12px;align-items:center;padding:18px 32px}
-.controls input{flex:1;max-width:520px;padding:12px 16px;border-radius:10px;border:1px solid var(--line);background:#0f1728;color:var(--txt);font-size:15px;outline:none}
-.controls input:focus{border-color:var(--blue)}
-.controls button{padding:12px 26px;border-radius:10px;border:0;background:linear-gradient(135deg,#3b82f6,#2563eb);color:#fff;font-size:15px;cursor:pointer}
-.controls button:disabled{opacity:.45;cursor:not-allowed}
-#status{color:var(--dim);font-size:13px}
-main{padding:8px 32px 40px;display:grid;gap:18px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;box-shadow:0 8px 30px rgba(0,0,0,.25)}
-.card h2{margin:0 0 10px;font-size:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.pill{font-style:normal;font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:20px;padding:2px 10px}
-.pill.run{color:#ffd76a;border-color:#8a6d1f}
-.pill.done{color:var(--green);border-color:#1f6d52}
-.content{font-size:14px;line-height:1.85;color:#d7e2f2;overflow-wrap:anywhere}
-.content h1,.content h2,.content h3{font-size:15px;margin:10px 0 6px}
-.content table{border-collapse:collapse;margin:8px 0;font-size:13px}
-.content th,.content td{border:1px solid var(--line);padding:4px 10px;white-space:nowrap}
-.content th{background:#0f1728}
-.content pre{background:#0f1728;padding:10px;border-radius:8px;overflow:auto}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-top:12px}
-.grid figure{margin:0;background:#0f1728;border:1px solid var(--line);border-radius:10px;padding:8px;text-align:center}
-.grid img{width:100%;height:auto}
-.grid figcaption{font-size:12px;color:var(--dim);margin-top:4px}
-footer{color:var(--dim);font-size:12px;padding:0 32px 28px}
-</style>
-</head>
-<body>
-<header>
-  <h1>🧬 DrugAgent <span class="v">v0.4</span></h1>
-  <p>多智能体药物发现助手 · 文献检索员 → 分子分析员 → 分子优化员 → 综合评审员</p>
-</header>
-<div class="controls">
-  <input id="topic" value="EGFR 抑制剂" placeholder="输入靶点 / 主题，例如：EGFR 抑制剂">
-  <button id="go">开始分析</button>
-  <span id="status"></span>
-</div>
-<main>
-  <section class="card"><h2>① 文献检索员（本地知识库 + PubMed 在线检索）<i class="pill" id="p-lit">等待</i></h2><div class="content" id="c-lit"></div></section>
-  <section class="card"><h2>② 分子分析员（PubChem + RDKit 性质计算）<i class="pill" id="p-mol">等待</i></h2><div class="content" id="c-mol"></div><div class="grid" id="mol-grid"></div></section>
-  <section class="card"><h2>③ 分子优化员（规则式类似物生成 + 性质优化筛选）<i class="pill" id="p-opt">等待</i></h2><div class="content" id="c-opt"></div><div class="grid" id="opt-grid"></div></section>
-  <section class="card"><h2>④ 综合评审员（候选分子分析报告 + 参考文献）<i class="pill" id="p-rep">等待</i></h2><div class="content" id="c-rep"></div></section>
-</main>
-<footer>数据源：PubMed / PubChem / RDKit · 模型：GLM-4-Flash（免费档）+ DeepSeek 兜底 · 仅供学习研究演示</footer>
-<script>
-const $ = id => document.getElementById(id);
-const esc = t => (t || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
-const render = t => (window.marked ? marked.parse(t || '') : '<pre>' + esc(t) + '</pre>');
-function setPill(id, cls, txt) { const p = $(id); p.className = 'pill ' + (cls || ''); p.textContent = txt; }
-const fmtD = v => (v > 0 ? '+' : '') + v;
-let timer = null, t0 = 0;
-$('go').onclick = () => {
-  const topic = $('topic').value.trim() || 'EGFR 抑制剂';
-  $('go').disabled = true;
-  ['lit','mol','opt','rep'].forEach(k => { setPill('p-'+k,'','等待'); $('c-'+k).innerHTML = ''; });
-  $('mol-grid').innerHTML = ''; $('opt-grid').innerHTML = '';
-  t0 = Date.now();
-  timer = setInterval(() => { $('status').textContent = '分析中… ' + (Math.round((Date.now()-t0)/100)/10) + 's'; }, 200);
-  setPill('p-lit', 'run', '进行中…');
-  const ev = new EventSource('/api/run?topic=' + encodeURIComponent(topic));
-  ev.onmessage = e => {
-    const d = JSON.parse(e.data);
-    if (d.type === 'start') { window._cands = d.candidates || []; }
-    else if (d.type === 'stage') {
-      const map = {literature:'lit', molecules:'mol', optimization:'opt', report:'rep'}[d.stage];
-      setPill('p-'+map, 'done', '完成');
-      $('c-'+map).innerHTML = render(d.text) + (d.refs ? render(d.refs) : '');
-      if (d.stage === 'literature') setPill('p-mol', 'run', '进行中…');
-      if (d.stage === 'molecules') {
-        setPill('p-opt', 'run', '进行中…');
-        $('mol-grid').innerHTML = (window._cands || []).map(n =>
-          `<figure><img src="/api/molimg?name=${encodeURIComponent(n)}" alt="${n}"><figcaption>${n}</figcaption></figure>`).join('');
-      }
-      if (d.stage === 'optimization') {
-        setPill('p-rep', 'run', '进行中…');
-        $('opt-grid').innerHTML = (d.analogs || []).map(a =>
-          `<figure><img src="/api/molimg?smiles=${encodeURIComponent(a.smiles)}" alt="${a.id}">` +
-          `<figcaption>${a.id} · ${esc(a.label)}<br>QED ${a.qed}（Δ${fmtD(a.dqed)}）· 相似度 ${a.sim}</figcaption></figure>`).join('');
-      }
-    }
-    else if (d.type === 'done') { clearInterval(timer); $('go').disabled = false; $('status').textContent = '完成 ✅ 用时 ' + d.elapsed + 's' + (d.report_path ? ' · 报告已存 ' + d.report_path : ''); ev.close(); }
-    else if (d.type === 'error') { clearInterval(timer); $('go').disabled = false; $('status').textContent = '出错：' + d.message; ev.close(); }
-  };
-  ev.onerror = () => { clearInterval(timer); $('go').disabled = false; $('status').textContent = '连接中断（请查看控制台日志）'; ev.close(); };
-};
-</script>
-</body>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#163c35" />
+    <title>DrugAgent · 药物发现工作台</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/marked.min.js" defer></script>
+    <script src="/static/app.js" type="module"></script>
+  </head>
+  <body>
+    <a class="skip" href="#workspace">跳至工作区</a>
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="DrugAgent 首页"
+        ><span class="brand-mark">D<span>•</span></span
+        ><span>DrugAgent<small>DISCOVERY WORKSPACE</small></span></a
+      >
+      <div class="nav-label">研究空间</div>
+      <nav aria-label="主导航">
+        <a class="nav-item selected" href="#workspace"
+          ><span aria-hidden="true">◈</span> 分析工作台
+          <span class="nav-index">01</span></a
+        >
+        <a class="nav-item" href="#knowledge"
+          ><span aria-hidden="true">▤</span> 本地知识库</a
+        >
+        <a class="nav-item" href="#history"
+          ><span aria-hidden="true">◷</span> 历史报告</a
+        >
+      </nav>
+      <div class="sidebar-bottom">
+        <span class="tiny-label">研究工具 / v0.5</span>
+        <p>从文献到分子，<br />连接每一步探索。</p>
+        <div class="sidebar-foot">仅供学习与研究使用</div>
+      </div>
+    </aside>
+    <div class="shell">
+      <header class="topbar">
+        <div class="breadcrumb">
+          研究空间 <span>/</span> <strong>分析工作台</strong>
+        </div>
+        <div class="environment">
+          <span class="status-dot" id="health-dot"></span
+          ><span id="health-label">检测服务状态</span>
+        </div>
+      </header>
+      <main id="workspace">
+        <div class="page-heading">
+          <div>
+            <div class="eyebrow">MOLECULAR DISCOVERY</div>
+            <h1>药物发现工作台<span class="heading-dot">.</span></h1>
+            <p>四个智能体协作，让候选分子分析的每一步都有据可循。</p>
+          </div>
+          <span class="edition">RESEARCH EDITION <b>0.5</b></span>
+        </div>
+        <section class="launch-grid" aria-label="新建研究">
+          <div class="launch-card">
+            <div class="section-kicker">
+              <span class="line-marker"></span> 开始一项研究
+              <span class="tag">EGFR 演示候选集</span>
+            </div>
+            <form id="analysis-form">
+              <label for="topic">你想探索什么？</label>
+              <div class="input-row">
+                <input
+                  id="topic"
+                  name="topic"
+                  value="EGFR 抑制剂"
+                  maxlength="200"
+                  required
+                  placeholder="输入研究主题，例如 EGFR 抑制剂"
+                  autocomplete="off"
+                /><button class="primary" id="go" type="submit" disabled>
+                  开始分析 <span aria-hidden="true">↗</span>
+                </button>
+              </div>
+            </form>
+            <div class="presets">
+              <span>试试</span
+              ><button type="button" data-topic="EGFR 抑制剂">
+                EGFR 抑制剂</button
+              ><button type="button" data-topic="EGFR 抑制剂耐药机制">
+                EGFR 耐药机制
+              </button>
+            </div>
+            <p class="scope-note">
+              当前使用内置 EGFR 候选分子；研究主题用于文献检索与分析解读。
+            </p>
+            <div id="config-notice" class="notice" hidden></div>
+          </div>
+          <aside class="sources-card">
+            <div class="section-kicker">真实数据 · 透明流程</div>
+            <div class="source-row">
+              <span class="source-icon">P</span>
+              <div>
+                <strong>PubMed + 本地知识库</strong
+                ><small>论文摘要与来源引用</small>
+              </div>
+            </div>
+            <div class="source-row">
+              <span class="source-icon blue">C</span>
+              <div>
+                <strong>PubChem + RDKit</strong
+                ><small>分子结构与性质计算</small>
+              </div>
+            </div>
+            <div class="provider-row">
+              <span>模型配置</span><strong id="provider-label">检测中</strong>
+            </div>
+          </aside>
+        </section>
+        <section class="pipeline" aria-label="分析进度">
+          <div class="pipeline-heading">
+            <h2>协作流程 <span>WORKFLOW</span></h2>
+            <div class="run-meta">
+              <span id="status" role="status" aria-live="polite"
+                >等待研究任务</span
+              ><span class="elapsed" id="elapsed">00:00</span>
+            </div>
+          </div>
+          <div class="steps" id="steps">
+            <div class="step" data-stage="literature">
+              <b>01</b><span>文献检索<small>关联知识与真实文献</small></span
+              ><i>待开始</i>
+            </div>
+            <div class="step" data-stage="molecules">
+              <b>02</b><span>分子分析<small>性质计算与初筛</small></span
+              ><i>待开始</i>
+            </div>
+            <div class="step" data-stage="optimization">
+              <b>03</b><span>分子优化<small>规则枚举与相似度筛选</small></span
+              ><i>待开始</i>
+            </div>
+            <div class="step" data-stage="report">
+              <b>04</b><span>综合评审<small>分析报告与参考来源</small></span
+              ><i>待开始</i>
+            </div>
+          </div>
+          <div class="progress-track"><div id="progress-bar"></div></div>
+        </section>
+        <div class="results-heading">
+          <h2>研究结果 <span>LIVE RESULTS</span></h2>
+          <a id="download-report" class="text-link" hidden>下载本次报告 ↓</a>
+        </div>
+        <div class="results-grid">
+          <section class="result-card" data-panel="literature">
+            <div class="card-heading">
+              <div>
+                <span class="card-index">01</span>
+                <h3>文献检索</h3>
+              </div>
+              <span class="pill" id="p-lit">等待</span>
+            </div>
+            <div class="card-subtitle">本地知识库 / PubMed</div>
+            <div class="content" id="c-lit">
+              <div class="empty">
+                <span class="empty-symbol">▤</span
+                ><strong>让研究从证据开始</strong>
+                <p>相关知识与论文摘要将在这里汇集</p>
+              </div>
+            </div>
+          </section>
+          <section class="result-card" data-panel="molecules">
+            <div class="card-heading">
+              <div>
+                <span class="card-index">02</span>
+                <h3>分子分析</h3>
+              </div>
+              <span class="pill" id="p-mol">等待</span>
+            </div>
+            <div class="card-subtitle">PubChem / RDKit / Lipinski</div>
+            <div class="content" id="c-mol">
+              <div class="empty">
+                <span class="empty-symbol">⬡</span
+                ><strong>从结构理解候选分子</strong>
+                <p>分子性质、类药性评分与结构图</p>
+              </div>
+            </div>
+            <div class="molecule-grid" id="mol-grid"></div>
+          </section>
+          <section class="result-card" data-panel="optimization">
+            <div class="card-heading">
+              <div>
+                <span class="card-index">03</span>
+                <h3>分子优化</h3>
+              </div>
+              <span class="pill" id="p-opt">等待</span>
+            </div>
+            <div class="card-subtitle">规则式类似物生成 / QED 排序</div>
+            <div class="content" id="c-opt">
+              <div class="empty">
+                <span class="empty-symbol">⌘</span
+                ><strong>探索结构优化的可能</strong>
+                <p>类似物筛选结果与母体性质对比</p>
+              </div>
+            </div>
+            <div class="molecule-grid" id="opt-grid"></div>
+          </section>
+          <section class="result-card" data-panel="report">
+            <div class="card-heading">
+              <div>
+                <span class="card-index">04</span>
+                <h3>综合评审</h3>
+              </div>
+              <span class="pill" id="p-rep">等待</span>
+            </div>
+            <div class="card-subtitle">候选点评 / 排序 / 风险与建议</div>
+            <div class="content" id="c-rep">
+              <div class="empty">
+                <span class="empty-symbol">≡</span
+                ><strong>把发现沉淀为研究报告</strong>
+                <p>汇总计算结果、文献依据与后续建议</p>
+              </div>
+            </div>
+          </section>
+        </div>
+        <section class="utility-grid">
+          <div class="utility-card" id="knowledge">
+            <div class="utility-heading">
+              <h2>本地知识库</h2>
+              <span class="tag">无需模型密钥</span>
+            </div>
+            <p>检索内置研究知识；向量服务不可用时自动使用关键词检索。</p>
+            <form id="search-form" class="search-row">
+              <label class="sr-only" for="search-query">知识检索词</label
+              ><input
+                id="search-query"
+                value="EGFR"
+                maxlength="200"
+                required
+                placeholder="输入关键词"
+              /><button class="secondary" id="search-button" type="submit">
+                检索知识 ↗
+              </button>
+            </form>
+            <div id="search-results" aria-live="polite"></div>
+          </div>
+          <div class="utility-card" id="history">
+            <div class="utility-heading">
+              <h2>历史报告</h2>
+              <button class="text-link" id="refresh-history" type="button">
+                刷新 ↻
+              </button>
+            </div>
+            <p>已完成的分析自动存档，可下载 Markdown 报告。</p>
+            <div id="report-list" aria-live="polite">正在读取报告…</div>
+          </div>
+        </section>
+        <footer>
+          <span><strong>DrugAgent</strong> / 多智能体药物发现平台</span
+          ><span>计算性质与规则式类似物未经实验验证 · 不构成医疗建议</span>
+        </footer>
+      </main>
+    </div>
+  </body>
 </html>

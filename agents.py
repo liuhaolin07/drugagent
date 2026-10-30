@@ -5,7 +5,8 @@
 """
 import json
 
-from llm import chat, parse_json
+from llm import chat, parse_json, ProviderError
+from drugagent.errors import DataSourceError
 from tools import generation, literature, molecules
 
 PROTOCOL_WITH_TOOLS = """
@@ -68,11 +69,12 @@ def _pick_parent(raw_mol):
 
 
 class Agent:
-    def __init__(self, name, system, tools=None, max_steps=3):
+    def __init__(self, name, system, tools=None, max_steps=3, chat_fn=None):
         self.name = name
         self.system = system
         self.tools = tools or {}
         self.max_steps = max_steps
+        self.chat = chat_fn or chat
 
     def _protocol(self):
         if not self.tools:
@@ -87,15 +89,17 @@ class Agent:
         ]
         log = []
         for _ in range(self.max_steps):
-            raw = chat(msgs)
+            raw = self.chat(msgs)
             obj = parse_json(raw)
             if obj is None or obj.get("action") == "final":
                 text = (obj or {}).get("text") if obj else raw
-                return {"agent": self.name, "text": (text or "").strip(), "tool_log": log}
+                if not isinstance(text, str) or not text.strip():
+                    raise ProviderError(f"{self.name}未返回有效结论，请重试。")
+                return {"agent": self.name, "text": text.strip(), "tool_log": log}
             if obj.get("action") == "tool":
                 tname = obj.get("name")
                 args = obj.get("args") or {}
-                if tname not in self.tools:
+                if not isinstance(tname, str) or tname not in self.tools:
                     msgs.append({"role": "assistant", "content": raw})
                     msgs.append({"role": "user",
                                  "content": f"[系统] 未知工具 {tname}，可用：{list(self.tools)}，请重试。"})
@@ -114,14 +118,15 @@ class Agent:
                 msgs.append({"role": "assistant", "content": raw})
                 msgs.append({"role": "user", "content": f"[工具 {tname} 结果]\n{rtxt}"})
                 continue
-            return {"agent": self.name, "text": raw.strip(), "tool_log": log}
-        return {"agent": self.name, "text": "（达到最大步数，未给出最终结论）", "tool_log": log}
+            raise ProviderError(f"{self.name}返回了无法识别的操作，请重试。")
+        raise ProviderError(f"{self.name}已达到最大工具调用步数，尚未得出结论，请重试。")
 
 
 class Team:
     """四个智能体 + 黑板状态的简单编排器（文献检索 → 分子分析 → 分子优化 → 综合评审）。"""
 
-    def __init__(self):
+    def __init__(self, chat_fn=None):
+        self.chat = chat_fn or chat
         self.lit = Agent(
             "文献检索员",
             "你是药物发现团队中的文献与知识检索专家。系统会预先给出本地知识库与 PubMed 的检索结果，"
@@ -131,15 +136,13 @@ class Team:
                               "输入 {\"query\": \"检索词\"}，检索本地知识库（内置语料 + 已缓存论文）。"),
              "search_pubmed": (literature.search_pubmed,
                                "输入 {\"query\": \"英文检索词\", \"retmax\": 4}，在线检索 PubMed 真实论文摘要并缓存。")},
-            max_steps=4)
+            max_steps=4, chat_fn=self.chat)
         self.mol = Agent(
             "分子分析员",
-            "你是药物发现团队中的计算化学专家。使用 analyze_molecules 工具对候选分子做一次批量分析"
-            "（PubChem 取 SMILES + RDKit 计算 MW/logP/TPSA/HBD/HBA/QED 与 Lipinski 初筛），"
-            "然后用中文输出一张 Markdown 性质表和初筛结论。",
-            {"analyze_molecules": (molecules.analyze_names,
-                                   "输入 {\"names\": [\"分子名\", ...]}，返回各分子的性质与 Lipinski 结果。")},
-            max_steps=3)
+            "你是药物发现团队中的计算化学专家。解读系统提供的 PubChem + RDKit 计算结果，"
+            "给出中文初筛结论；数值必须来自提供的数据，不输出表格或发起工具调用。",
+            tools=None,
+            max_steps=3, chat_fn=self.chat)
         self.opt = Agent(
             "分子优化员",
             "你是药物发现团队中的分子生成与优化专家。系统会预先给出母体分子的「规则式类似物生成与优化」结果"
@@ -147,30 +150,23 @@ class Team:
             "请用中文输出 3-6 句解读：① 生成与筛选规模（引用生成数 / 筛选数）；② 表现最好的类似物及其改进点"
             "（必须引用 ΔQED、ΔlogP、相似度等具体数值）；③ 局限与风险（规则式修饰、性质仅为计算值、需对接与活性验证）；"
             "④ 一条下一步建议。不要输出表格（表格由系统直接给出），不要编造未提供的数值。",
-            {"generate_analogs": (generation.analyze_generation,
-                                  "输入 {\"parent_name\": \"母体名\", \"parent_smiles\": \"SMILES\", \"top_k\": 6}，"
-                                  "对母体做规则式类似物生成与优化筛选，返回统计、Top 类似物与 Markdown 表。")},
-            max_steps=3)
+            tools=None,
+            max_steps=3, chat_fn=self.chat)
         self.synth = Agent(
             "综合评审员",
-            "你是药物发现团队的评审专家。基于提供的文献要点、分子性质数据与分子生成优化结果，输出一份中文《候选分子分析报告》。"
-            "用加粗小标题分段（不要编号），顺序如下："
-            "**背景与靶点要点**：3-5 句，结合文献要点并标注来源（论文写 PMID / 本地条目写标题）；"
-            "**候选分子性质表**：必须原样嵌入任务里给出的《性质表》（逐字复制，禁止改动任何数值或增删行）；"
-            "**分子生成与优化**：先用 1-2 句概述生成与筛选结果，再原样嵌入任务里给出的《优化结果表》（逐字复制，禁止改动）；"
-            "**逐分子点评与排序**：对《性质表》中的每个候选分子（不要点评 A1–A6 类似物）各给一句话点评"
-            "（必须引用 QED / logP / MW 等表中数值），并给出候选分子的排序列表；"
-            "**风险与后续建议**：结合文献中的耐药机制或趋势信息；提及类似物的规则式生成局限。"
-            "结尾另起一行，只写这一句：参考来源见文末参考文献。"
-            "数据来源：PubChem / RDKit；不夸大结论。",
-            tools=None, max_steps=2)
+            "你是药物发现团队的评审专家。依据提供的真实文献、分子性质与优化数据，输出中文评审意见。"
+            "使用加粗小标题：背景与靶点要点、逐分子点评与排序、风险与后续建议。"
+            "引用论文 PMID 或本地知识条目标题，点评必须依据已提供数值，不编造数据或实验结论。"
+            "不要输出性质表、优化表或参考文献列表，这些内容由系统代码附加。"
+            "说明类似物来自规则式枚举，仍需对接及活性验证。",
+            tools=None, max_steps=2, chat_fn=self.chat)
 
     def _lit_stage(self, topic):
         """确定性检索（本地 + PubMed）→ 文献检索员综述。关键路径不依赖模型自觉。"""
         # 1) 生成英文 PubMed 检索式
         q = topic
         try:
-            raw = chat([{"role": "system",
+            raw = self.chat([{"role": "system",
                          "content": "把用户给出的中文研究主题转写为 3-6 个词的英文 PubMed 检索式"
                                     "（可用 AND 连接）。只输出 JSON：{\"query\": \"...\"}"},
                         {"role": "user", "content": topic}])
@@ -178,15 +174,18 @@ class Team:
         except Exception:
             pass
         # 2) 确定性执行两个检索
+        warnings = []
         try:
             local = literature.search_local(topic, top=4)
-        except Exception as e:
-            local = [{"error": repr(e)[:120]}]
+        except Exception:
+            local = []
+            warnings.append("本地知识检索暂不可用。")
         papers = []
         try:
             papers = literature.search_pubmed(str(q), retmax=4).get("results", [])
-        except Exception as e:
-            papers = [{"error": repr(e)[:120]}]
+        except Exception:
+            papers = []
+            warnings.append("PubMed 暂不可用，本阶段仅使用已取得的知识来源。")
         # 3) 交给文献检索员综述（结果已在手，工具仍可补充调用）
         ctx = json.dumps({"检索词": q, "本地知识库": local, "PubMed 论文": papers},
                          ensure_ascii=False)[:5500]
@@ -195,6 +194,7 @@ class Team:
             context=ctx)
         lit["papers"] = papers
         lit["local"] = local
+        lit["warnings"] = warnings
         return lit
 
     def analyze_iter(self, topic, candidates):
@@ -203,21 +203,17 @@ class Team:
         lit = self._lit_stage(topic)
         yield "literature", lit
 
+        # Fetch and calculate data once before asking the model to interpret it.
+        # The model cannot skip computation or replace the authoritative table.
+        raw_mol = molecules.analyze_names(names)
+        if not any(not row.get("error") for row in raw_mol):
+            raise DataSourceError("候选分子数据全部获取失败，请检查 PubChem 访问后重试。")
         mol = self.mol.run(
-            "对候选分子名单做批量性质分析，并总结成 Markdown 表 + 初筛结论。",
-            context=f"候选名单：{names}（直接一次性调用 analyze_molecules）",
-        )
+            "解读以下已计算的候选分子数据，给出初筛结论。不要重复调用工具或输出表格。",
+            context=json.dumps(raw_mol, ensure_ascii=False))
+        mol["text"] = _render_table(raw_mol) + "\n\n" + mol["text"]
+        mol["molecules"] = raw_mol
         yield "molecules", mol
-
-        raw_mol = None
-        for entry in mol["tool_log"]:
-            if entry.get("tool") == "analyze_molecules":
-                raw_mol = entry.get("result")
-        if raw_mol is None:  # 兜底：模型未调用工具时由编排器直接跑（关键路径不交给模型自觉）
-            try:
-                raw_mol = molecules.analyze_names(names)
-            except Exception:
-                raw_mol = []
 
         # —— ③ 分子优化员：确定性「生成 → 筛选 → 排序」（RDKit，零模型依赖）——
         parent = _pick_parent(raw_mol)
@@ -249,12 +245,12 @@ class Team:
              "分子生成与优化": gen_summary, "候选说明": candidates},
             ensure_ascii=False)[:7500]
         table = _render_table(raw_mol)
-        task = ("输出《候选分子分析报告》。注意：以下《性质表》与《优化结果表》请原样嵌入"
-                "（逐字复制、不得改动任何数值）：\n\n《性质表》：\n\n" + table
-                + "\n\n《优化结果表》：\n\n" + (gen.get("table_md") or "（本次未生成类似物）"))
+        task = "输出候选分子分析评审意见。仅解读给定数据，不输出表格。"
         rep = self.synth.run(task, context=ctx)
         refs = _render_refs(lit.get("papers"), lit.get("local"))
-        yield "report", {"text": rep["text"], "refs": refs}
+        text = (rep["text"] + "\n\n### 候选分子性质表\n\n" + table
+                + "\n\n### 分子生成与优化\n\n" + gen.get("table_md", "（本次未生成类似物）"))
+        yield "report", {"text": text, "refs": refs}
 
     def analyze(self, topic, candidates, on_stage=None):
         """完整流程（非流式版）：收集 analyze_iter 的结果。"""

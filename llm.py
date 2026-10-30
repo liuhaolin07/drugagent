@@ -1,69 +1,97 @@
-# -*- coding: utf-8 -*-
-"""极简 LLM 客户端：OpenAI 兼容端点，多 provider 自动回退。"""
+"""OpenAI-compatible providers with lazy clients and explicit failure semantics."""
 import json
+import logging
+from threading import Lock
 
 from openai import OpenAI
-
 from config import PROVIDERS
 
-_clients = None
+logger = logging.getLogger(__name__)
 
 
-def _init():
-    global _clients
-    if _clients is not None:
-        return
-    _clients = []
-    for p in PROVIDERS:
-        if p["key"]:
-            _clients.append((p, OpenAI(api_key=p["key"], base_url=p["base_url"], timeout=90)))
-    if not _clients:
-        raise RuntimeError("没有可用的 API key（检查 D:/Hermes/.env）")
+class MissingProviderError(RuntimeError):
+    def __init__(self):
+        super().__init__("请在环境变量或项目 .env 中配置 GLM_API_KEY 或 DEEPSEEK_API_KEY，再启动分析。")
+
+
+class ProviderError(RuntimeError):
+    pass
+
+
+class LLMClient:
+    def __init__(self, providers=None, client_factory=OpenAI):
+        self.providers = PROVIDERS if providers is None else providers
+        self.client_factory = client_factory
+        self._clients = None
+        self._lock = Lock()
+
+    def available(self):
+        return any(p.get("key") for p in self.providers)
+
+    def provider_status(self):
+        # Only public metadata, never keys or exception strings from remote APIs.
+        return [{"name": p["name"], "model": p["model"], "configured": bool(p.get("key"))}
+                for p in self.providers]
+
+    def _init(self):
+        with self._lock:
+            if self._clients is None:
+                clients = [(p, self.client_factory(api_key=p["key"], base_url=p["base_url"],
+                                                  timeout=90, max_retries=1))
+                           for p in self.providers if p.get("key")]
+                if not clients:
+                    raise MissingProviderError()
+                self._clients = clients
+            return self._clients
+
+    def chat(self, messages, temperature=0.3):
+        for provider, client in self._init():
+            try:
+                response = client.chat.completions.create(
+                    model=provider["model"], messages=messages, temperature=temperature)
+                content = response.choices[0].message.content
+                if not content or not content.strip():
+                    raise ValueError("empty response")
+                return content
+            except Exception:
+                logger.warning("Provider %s chat failed; trying fallback", provider["name"])
+        raise ProviderError("模型服务调用失败，请检查凭证、网络访问和模型配额后重试。")
+
+    def embed(self, texts, model="embedding-3"):
+        try:
+            clients = self._init()
+        except MissingProviderError:
+            return None
+        for provider, client in clients:
+            if provider["name"] == "glm":
+                try:
+                    result = client.embeddings.create(model=model, input=texts)
+                    return [item.embedding for item in sorted(result.data, key=lambda d: d.index)]
+                except Exception:
+                    logger.info("Embedding unavailable; using BM25 retrieval")
+                    return None
+        return None
+
+
+_default_client = LLMClient()
 
 
 def chat(messages, temperature=0.3):
-    """返回文本；按 provider 顺序重试。"""
-    _init()
-    last = None
-    for p, cli in _clients:
-        try:
-            r = cli.chat.completions.create(
-                model=p["model"], messages=messages, temperature=temperature)
-            return r.choices[0].message.content or ""
-        except Exception as e:
-            last = e
-            print(f"  [llm] {p['name']}/{p['model']} 调用失败: {repr(e)[:110]}，切换下一个…")
-    raise RuntimeError(f"所有 provider 均失败: {last!r}")
+    return _default_client.chat(messages, temperature)
 
 
 def embed(texts, model="embedding-3"):
-    """GLM embedding（免费档，2048 维）；失败返回 None（调用方回退 BM25）。"""
-    _init()
-    for p, cli in _clients:
-        if p["name"] != "glm":
-            continue
-        try:
-            r = cli.embeddings.create(model=model, input=texts)
-            return [d.embedding for d in r.data]
-        except Exception as e:
-            print(f"  [llm] embedding({model}) 失败: {repr(e)[:100]}，回退 BM25 检索")
-            return None
-    return None
+    return _default_client.embed(texts, model)
 
 
-def parse_json(s):
-    """鲁棒解析：容忍 ```json 包裹与前后杂质。"""
-    if not s:
+def parse_json(text):
+    if not isinstance(text, str):
         return None
-    s = s.strip()
-    if s.startswith("```"):
-        s = s.strip("`")
-        if s[:4].lower() == "json":
-            s = s[4:]
-    i, j = s.find("{"), s.rfind("}")
-    if i < 0 or j <= i:
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
         return None
     try:
-        return json.loads(s[i:j + 1])
-    except Exception:
+        result = json.loads(text[start:end + 1])
+        return result if isinstance(result, dict) else None
+    except (ValueError, TypeError):
         return None

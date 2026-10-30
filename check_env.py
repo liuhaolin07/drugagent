@@ -1,54 +1,49 @@
-# -*- coding: utf-8 -*-
-"""环境自检：依赖、API key、GLM/DeepSeek 连通性、PubChem+RDKit。"""
+"""Portable diagnostics. Remote requests are opt-in: python check_env.py --online."""
+import argparse
 import sys
-print("python", sys.version.split()[0])
-import openai, rdkit, requests, rich
-print("openai", openai.__version__, "| rdkit", rdkit.__version__, "| requests", requests.__version__)
 
-env = {}
-for line in open(r"D:/Hermes/.env", encoding="utf-8", errors="replace"):
-    line = line.strip()
-    if "=" in line and not line.startswith("#"):
-        k, v = line.split("=", 1)
-        env[k.strip()] = v.strip().strip('"').strip("'")
-glm, ds = env.get("GLM_API_KEY", ""), env.get("DEEPSEEK_API_KEY", "")
-print("GLM key:", "有" if glm else "无", "| DeepSeek key:", "有" if ds else "无")
+from config import settings
+from llm import _default_client, MissingProviderError
+from tools.literature import search_pubmed
+from tools.molecules import mol_props, smiles_from_pubchem
 
-from openai import OpenAI
 
-if glm:
-    for model in ["glm-4-flash", "glm-4.5-flash", "glm-4-air", "glm-4-airx"]:
-        try:
-            cli = OpenAI(api_key=glm, base_url="https://open.bigmodel.cn/api/paas/v4", timeout=40)
-            r = cli.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": "用一句话中文打个招呼"}],
-                temperature=0.3)
-            print(f"[GLM {model}] OK ->", (r.choices[0].message.content or "").strip()[:50])
-            break
-        except Exception as e:
-            print(f"[GLM {model}] FAIL ->", repr(e)[:130])
-if ds:
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='DrugAgent 环境自检')
+    parser.add_argument('--online', action='store_true', help='额外验证模型、PubMed 和 PubChem（会调用模型 API）')
+    args = parser.parse_args(argv)
+    import openai, rdkit
+    print(f'Python {sys.version.split()[0]} / OpenAI {openai.__version__} / RDKit {rdkit.__version__}')
+    for provider in _default_client.provider_status():
+        print(f"{provider['name']}: {'已配置' if provider['configured'] else '未配置'} / {provider['model']}")
+    assert abs(mol_props('CCO')['MW'] - 46.07) < 0.01
+    print('PASS RDKit 分子性质计算')
+    # A deterministic BM25 diagnostic that never attempts an external embedding call.
+    from tools.retriever import Retriever
+    from tools.literature import _load_json, _doc_from_corpus, CORPUS_PATH
+    retriever = Retriever()
+    retriever.add([_doc_from_corpus(d) for d in _load_json(CORPUS_PATH, [])])
+    hits = retriever.search('EGFR', top=2, use_embeddings=False)
+    assert hits, '本地知识库无可检索内容'
+    print('PASS 本地 BM25 检索')
+    print(f'网页监听：{settings.host}:{settings.port}')
+    if not args.online:
+        print('在线模型与数据源未检查；使用 --online 显式验证。')
+        return 0
     try:
-        cli = OpenAI(api_key=ds, base_url="https://api.deepseek.com", timeout=40)
-        r = cli.chat.completions.create(
-            model="deepseek-chat",
-            messages=[{"role": "user", "content": "用一句话中文打个招呼"}],
-            temperature=0.3)
-        print("[DeepSeek deepseek-chat] OK ->", (r.choices[0].message.content or "").strip()[:50])
-    except Exception as e:
-        print("[DeepSeek] FAIL ->", repr(e)[:130])
+        if not _default_client.available():
+            raise MissingProviderError()
+        assert mol_props(smiles_from_pubchem('gefitinib'))
+        print('PASS PubChem + RDKit')
+        assert search_pubmed('EGFR inhibitors', retmax=1)['results']
+        print('PASS PubMed')
+        assert _default_client.chat([{'role':'user','content':'请回复：连接正常'}])
+        print('PASS 模型响应')
+        return 0
+    except Exception as error:
+        print(f'在线检查失败：{type(error).__name__}；请检查凭证、网络和服务日志。')
+        return 1
 
-try:
-    r = requests.get(
-        "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/gefitinib/property/CanonicalSMILES/JSON",
-        timeout=30)
-    smi = r.json()["PropertyTable"]["Properties"][0]["CanonicalSMILES"]
-    from rdkit import Chem
-    from rdkit.Chem import Descriptors, QED
-    m = Chem.MolFromSmiles(smi)
-    print("PubChem+RDKit OK -> gefitinib MW =", round(Descriptors.MolWt(m), 1),
-          "| QED =", round(QED.qed(m), 3))
-    print("SMILES:", smi[:80])
-except Exception as e:
-    print("PubChem FAIL ->", repr(e)[:200])
+
+if __name__ == '__main__':
+    raise SystemExit(main())
