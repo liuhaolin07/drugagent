@@ -1,85 +1,99 @@
-# DrugAgent · 多智能体药物发现助手（v0.4）
+# DrugAgent · 多智能体药物发现平台
 
-一个「多智能体药物发现」原型：**文献检索员 + 分子分析员 + 分子优化员 + 综合评审员** 四个 LLM 智能体通过共享黑板协作，输入一个靶点/主题，输出一份带**真实数据与文献引用**的候选分子分析报告与**规则式类似物优化建议**。命令行 + 网页版双入口。
+**从文献依据到分子优化，把每一步探索变成可追踪的研究结果。**
 
-## 现在能做什么（v0.4）
+DrugAgent v0.5 将文献检索、分子分析、规则式类似物优化与综合评审连接成一个工作台。提供网页与命令行入口，支持实时进度、RDKit 结构图、本地知识检索及报告归档下载。
 
-- 🔍 **文献检索员**
-  - **本地知识库语义检索**（GLM embedding-3 向量检索，失败自动回退 BM25）
-  - **PubMed 在线检索**：E-utilities 公开接口，抓真实论文摘要，**结果自动缓存**进本地知识库（越用越强）
-- 🧪 **分子分析员**：从 **PubChem** 拉取候选分子 SMILES（真实数据），用 **RDKit** 计算 MW / logP / TPSA / HBD / HBA / QED，做 **Lipinski 初筛**
-- 🧬 **分子优化员（v0.4 新增）**：对初筛最优母体做**规则式类似物生成与优化**（确定性管线，零模型依赖）——
-  - 15 种药物化学常见小修饰（芳环取代 / 卤素交换 / 甲基化·脱甲基 / 脱卤等）经 **RDKit 反应枚举**批量生成类似物
-  - 以 **Lipinski 合规 + 与母体相似度（Morgan/Tanimoto ≥ 0.4）** 筛选，按 **QED（类药性评分）** 排序，给出 ΔQED / ΔlogP 对比
-  - 表格与类似物结构图全部由**代码直接生成**（SMILES → RDKit 绘制）；报告标注局限（非生成式模型产物、需对接/活性验证）
-- 🧾 **综合评审员**：融合文献与分子数据，生成中文《候选分子分析报告》（背景 / 性质表 / 生成与优化 / 逐分子点评+排序 / 风险建议 / 参考来源含 PMID）
-  - 性质表与优化表由**代码直接生成**、模型原样嵌入 —— 数据零转手、零误差
-- 🖥 全程可追踪：每个智能体的工具调用实时打点；报告自动存到 `reports/`
-- 🌐 **网页版演示**：一键启动，SSE 实时进度、RDKit 分子结构图（候选 + 类似物）、报告在线 Markdown 渲染
+**Python 3.12 · FastAPI · RDKit · Docker Compose**
+
+> v0.5 运行代码与完整部署资源位于 [`codex/platform-deployment-handoff`](https://github.com/liuhaolin07/drugagent/tree/codex/platform-deployment-handoff) 分支。请使用下方命令拉取该分支。
+
+[快速开始](#快速开始) · [部署说明](https://github.com/liuhaolin07/drugagent/blob/codex/platform-deployment-handoff/docs/deployment.md) · [本地 Agent 交接](https://github.com/liuhaolin07/drugagent/blob/codex/platform-deployment-handoff/docs/LOCAL_AGENT_HANDOFF.md) · [验收记录](https://github.com/liuhaolin07/drugagent/blob/codex/platform-deployment-handoff/docs/deployment.md#验收记录) · [开发与 API](https://github.com/liuhaolin07/drugagent/blob/codex/platform-deployment-handoff/docs/development.md)
+
+![DrugAgent v0.5 分析工作台](docs/images/workspace-desktop.png)
+
+*实际工作台截图：未配置模型密钥时，页面说明可用能力与配置要求；本地知识检索仍可使用。*
+
+## 能做什么
+
+| 能力 | 结果 |
+| --- | --- |
+| 文献检索 | 本地语料与 PubMed 摘要检索，保留论文 PMID 和知识来源 |
+| 分子分析 | 从 PubChem 获取 SMILES，用 RDKit 计算 MW、logP、TPSA、HBD、HBA、QED 与 Lipinski 判定 |
+| 分子优化 | 15 种规则式修饰枚举类似物，按 Lipinski、相似度和 QED 筛选、排序 |
+| 综合评审 | 模型解读已有证据，代码生成性质表、优化表与参考来源 |
+| 研究工作台 | 四阶段实时进度、候选与类似物结构图、来源警告、Markdown 报告下载 |
+| 一键交付 | 固定依赖与哈希校验、Docker 健康检查、非 root 运行、报告及缓存持久化 |
+
+当前使用**内置 EGFR 演示候选集**。研究主题用于文献检索和解读，不会自动替换为其他靶点的候选分子。类似物来自 RDKit 规则式枚举，仍需实验与对接验证。
 
 ## 快速开始
 
-```bash
-cd D:/work/drugagent
-.venv\Scripts\python.exe run.py "EGFR 抑制剂"
-```
-
-> 双击 `run_demo.bat` 也可以。
-> 依赖：`openai` / `rdkit` / `requests` / `rich` / `fastapi` / `uvicorn`（已装进本项目 .venv）
-> 模型：默认智谱 `glm-4-flash`（免费档）+ `embedding-3`，失败自动回退 DeepSeek；key 从 `D:/Hermes/.env` 读取。
-
-## 网页版演示
+需要已运行的 Docker Desktop，或 Docker Engine + Compose v2.20+。无需自行安装 Python、RDKit、Node.js、数据库或 GPU 环境。
 
 ```bash
-# 双击 start_web.bat，或：
-.venv\Scripts\python.exe web.py     # → http://127.0.0.1:8077
+git clone --branch codex/platform-deployment-handoff --single-branch https://github.com/liuhaolin07/drugagent.git
+cd drugagent
+docker compose up -d --build --wait --wait-timeout 120
 ```
 
-输入靶点、点击「开始分析」：四个智能体的实时进度、候选与类似物分子结构图、最终报告会在页面上逐步呈现。
+默认在本机 `http://localhost:8077` 访问。首次会下载镜像和依赖，之后复用构建结果。
 
-![DrugAgent Web UI 演示](docs/screenshot_webui_done.png)
+- **Windows**：进入项目后，也可直接双击 `start.bat`。
+- **Linux / macOS**：也可执行 `sh scripts/start.sh`；Linux 已实测，macOS 尚未实测。
+- **完整分析**：将 `.env.example` 复制为 `.env`，在本机编辑器中填写 `GLM_API_KEY` 或 `DEEPSEEK_API_KEY`，再重新执行启动命令。已有 `.env` 时保留其中配置；密钥不要提交到 Git。
+- **无密钥体验**：本地 BM25 知识检索与按 SMILES 绘图可用；完整分析会明确提示模型待配置。
+- **端口被占用**：在 `.env` 设置 `DRUGAGENT_PORT=8080`，重新启动后使用对应端口。
 
-## 架构
+推荐由部署者统一配置模型并部署服务，让其他人打开网址使用。服务器、域名、HTTPS 与 SSE 反向代理步骤见 [部署说明](https://github.com/liuhaolin07/drugagent/blob/codex/platform-deployment-handoff/docs/deployment.md)。当前是共享研究工作区，访问者共用历史报告。
 
-```
-用户问题 ─→ 编排器（黑板状态）
-              ├─ 文献检索员  ←→ search_local（语义检索：语料+论文缓存）
-              │              ←→ search_pubmed（PubMed 在线 → 自动缓存）
-              ├─ 分子分析员  ←→ analyze_molecules（PubChem + RDKit）
-              ├─ 分子优化员  ←→ generate_analogs（RDKit 反应枚举 → 筛选 → QED 排序）
-              └─ 综合评审员  ←→ 汇总输出报告（reports/*.md，含 PMID 引用）
-```
+## 让本地 Agent 接手
 
-文件结构：
+把下面的任务交给本地 agent 即可。完整代码与部署资源都在 GitHub，不依赖云端附件：
 
-```
-drugagent/
-├─ run.py             # 命令行入口
-├─ web.py             # 网页版入口（FastAPI + SSE + RDKit 结构图）
-├─ agents.py          # Agent（JSON 工具协议）+ Team（四智能体编排器）
-├─ llm.py             # LLM 客户端（多 provider 回退 + embedding）
-├─ config.py          # 读 key / provider 配置
-├─ check_webui.py     # 无头 Edge + CDP 端到端验证（开发工具，产出 docs/ 截图）
-├─ tools/
-│  ├─ retriever.py    # 语义检索器（embedding-3 / BM25 回退，向量磁盘缓存）
-│  ├─ molecules.py    # PubChem + RDKit 性质与 Lipinski
-│  ├─ generation.py   # 规则式类似物生成与优化（反应枚举 / 筛选 / 排序 / 表格）
-│  └─ literature.py   # 本地知识库检索 + PubMed 在线检索/缓存
-├─ web/
-│  └─ index.html      # 前端单页（SSE + 报告渲染 + 候选/类似物结构图；marked 已本地化）
-└─ data/
-   ├─ corpus.json        # 内置知识语料（可替换为论文库）
-   ├─ paper_cache.json   # PubMed 抓取的论文缓存（自动增长）
-   ├─ embed_cache.json   # embedding 向量缓存
-   └─ egfr_candidates.csv # 候选分子表（演示用）
+```text
+请拉取 liuhaolin07/drugagent 的 codex/platform-deployment-handoff 分支，
+先阅读 docs/LOCAL_AGENT_HANDOFF.md，
+按文档完成本机 Docker 部署、基础功能、真实在线分析及重启持久化验收。
+保留已有配置，密钥仅使用本机环境变量或未跟踪的 .env，不要在聊天或日志中输出。
 ```
 
-## Roadmap
+[Agent 交接清单](https://github.com/liuhaolin07/drugagent/blob/codex/platform-deployment-handoff/docs/LOCAL_AGENT_HANDOFF.md) 包含 Windows / Linux 命令、模型配置、验收标准、已知偏差与排错步骤。当前 v0.5 运行代码与部署资源位于 `codex/platform-deployment-handoff` 分支，本页提供统一入口。
 
-- [x] v0.1 命令行三智能体协作 + 真实数据（PubChem / RDKit）
-- [x] v0.2 检索升级：语义检索（embedding-3）+ PubMed 在线检索 + 论文自动缓存
-- [x] v0.3 网页版 UI：SSE 实时进度 + 分子结构图 + 报告在线渲染（附无头 Edge 验证脚本）
-- [x] v0.4 分子生成与优化：规则式类似物枚举（15 种修饰）+ 相似度/QED 筛选 + 结构图（对齐「分子生成与优化」任务）
-- [ ] v0.5 生成式模型接入（对接分子生成 AI 后端）/ 分子对接打分 / 对比实验模板
+## 工作流程
 
-> 仅用于学习与研究演示；数据来自 PubMed / PubChem / RDKit，不构成任何医疗建议。
+```mermaid
+flowchart LR
+    Q["研究主题"] --> L["文献检索<br/>本地知识库 + PubMed"]
+    L --> M["分子分析<br/>PubChem + RDKit"]
+    M --> O["分子优化<br/>规则枚举 + 性质筛选"]
+    O --> R["综合评审<br/>研究报告 + 参考来源"]
+```
+
+网页与 CLI 共用分析服务和报告存储。分子数据先计算，再交给模型解读；性质表、优化表和引用由代码生成。来源不可用时明确提示，所有候选分子均无法获取或流程未完成时不会发布成功报告。
+
+## 验证情况
+
+| 范围 | 验证结果 |
+| --- | --- |
+| Linux Docker | 完整构建、发布包全新目录启动、真实分子计算与 PNG、报告下载、重建后持久化通过 |
+| 后端回归 | 云端 19 项测试通过，覆盖模型回退、SSE、CLI、真实 RDKit 与报告存储 |
+| Windows Docker | 依据本地 agent 报告，`start.bat`、基础功能、4 次真实在线分析及重启持久化通过 |
+| 浏览器 | 1440 / 390 宽度、阶段进度、结构图、安全 Markdown 渲染与失败恢复通过 |
+| 待验证范围 | macOS、ARM、具体云平台与公网域名部署 |
+
+Windows 在线验收取得真实 PubMed 论文和分子数据；示例 gefitinib 生成 55 个类似物，48 个通过筛选，展示 Top 6。验收基于提交 `fe41c77`；模型与网络可用性仍需在新部署机器上独立确认。详细来源与已知偏差见 [验收记录](https://github.com/liuhaolin07/drugagent/blob/codex/platform-deployment-handoff/docs/deployment.md#验收记录)。
+
+## 文档与开发
+
+| 入口 | 内容 |
+| --- | --- |
+| [部署说明](https://github.com/liuhaolin07/drugagent/blob/codex/platform-deployment-handoff/docs/deployment.md) | Docker、服务器与域名接入、数据持久化、更新与排错 |
+| [Agent 交接](https://github.com/liuhaolin07/drugagent/blob/codex/platform-deployment-handoff/docs/LOCAL_AGENT_HANDOFF.md) | 从拉取仓库到完整验收的可执行清单 |
+| [开发与 API 参考](https://github.com/liuhaolin07/drugagent/blob/codex/platform-deployment-handoff/docs/development.md) | Python 本地启动、配置变量、模块架构、接口与测试命令 |
+| [.env.example](https://github.com/liuhaolin07/drugagent/blob/codex/platform-deployment-handoff/.env.example) | 模型、端口和存储路径配置模板 |
+| [旧版报告示例](https://github.com/liuhaolin07/drugagent/blob/codex/platform-deployment-handoff/docs/example_report_EGFR.md) | 报告结构示例，非本次 Windows 验收产物 |
+
+默认模型为 GLM，支持 DeepSeek 对话回退；语义检索不可用时使用 BM25。本地开发支持 `python web.py`、`python run.py "EGFR 抑制剂"`，详见开发文档。
+
+项目使用 [MIT License](https://github.com/liuhaolin07/drugagent/blob/codex/platform-deployment-handoff/LICENSE)。仅供学习与研究，不构成医疗建议。
