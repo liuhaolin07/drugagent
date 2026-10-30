@@ -13,6 +13,7 @@ ROOT_FILES = (
     'requirements.txt', 'requirements.lock', 'requirements-dev.txt', 'agents.py', 'config.py',
     'llm.py', 'web.py', 'run.py', 'check_env.py', 'start.bat',
     'data/corpus.json', 'data/egfr_candidates.csv', 'docs/deployment.md', 'docs/LOCAL_AGENT_HANDOFF.md',
+    'docs/development.md', 'docs/images/workspace-desktop.png',
     'docs/example_report_EGFR.md',
 )
 CODE_DIRECTORIES = ('drugagent', 'tools', 'web', 'scripts', 'tests')
