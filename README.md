@@ -6,6 +6,8 @@ DrugAgent v0.5 将文献检索、分子分析、规则式类似物优化与综�
 
 **Python 3.12 · FastAPI · RDKit · Docker Compose**
 
+> v0.5 运行代码与完整部署资源位于 [`codex/platform-deployment-handoff`](https://github.com/liuhaolin07/drugagent/tree/codex/platform-deployment-handoff) 分支。请使用下方命令拉取该分支。
+
 [快速开始](#快速开始) · [部署说明](docs/deployment.md) · [本地 Agent 交接](docs/LOCAL_AGENT_HANDOFF.md) · [验收记录](docs/deployment.md#验收记录) · [开发与 API](docs/development.md)
 
 ![DrugAgent v0.5 分析工作台](docs/images/workspace-desktop.png)
@@ -30,7 +32,7 @@ DrugAgent v0.5 将文献检索、分子分析、规则式类似物优化与综�
 需要已运行的 Docker Desktop，或 Docker Engine + Compose v2.20+。无需自行安装 Python、RDKit、Node.js、数据库或 GPU 环境。
 
 ```bash
-git clone https://github.com/liuhaolin07/drugagent.git
+git clone --branch codex/platform-deployment-handoff --single-branch https://github.com/liuhaolin07/drugagent.git
 cd drugagent
 docker compose up -d --build --wait --wait-timeout 120
 ```
@@ -50,12 +52,13 @@ docker compose up -d --build --wait --wait-timeout 120
 把下面的任务交给本地 agent 即可。完整代码与部署资源都在 GitHub，不依赖云端附件：
 
 ```text
-请拉取 liuhaolin07/drugagent，先阅读 docs/LOCAL_AGENT_HANDOFF.md，
+请拉取 liuhaolin07/drugagent 的 codex/platform-deployment-handoff 分支，
+先阅读 docs/LOCAL_AGENT_HANDOFF.md，
 按文档完成本机 Docker 部署、基础功能、真实在线分析及重启持久化验收。
 保留已有配置，密钥仅使用本机环境变量或未跟踪的 .env，不要在聊天或日志中输出。
 ```
 
-[Agent 交接清单](docs/LOCAL_AGENT_HANDOFF.md) 包含 Windows / Linux 命令、模型配置、验收标准、已知偏差与排错步骤。`codex/platform-deployment-handoff` 分支保留对应交付记录，默认分支提供当前版本。
+[Agent 交接清单](docs/LOCAL_AGENT_HANDOFF.md) 包含 Windows / Linux 命令、模型配置、验收标准、已知偏差与排错步骤。当前 v0.5 运行代码与部署资源位于 `codex/platform-deployment-handoff` 分支，本页提供统一入口。
 
 ## 工作流程
 
