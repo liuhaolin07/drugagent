@@ -26,6 +26,8 @@ docker compose up -d --build --wait --wait-timeout 120
 
 服务器部署、域名接入、更新与交付包制作见 [开箱即用部署说明](docs/deployment.md)。
 
+验证状态：Linux Docker 交付流程通过；依据本地 agent 的报告，Windows Docker 的 `start.bat`、真实在线分析及重启持久化也已通过。见 [验收记录](docs/deployment.md#验收记录)。
+
 ## 启动
 
 需要 Python 3.12（已验证），无需数据库、GPU 或前端构建工具。
